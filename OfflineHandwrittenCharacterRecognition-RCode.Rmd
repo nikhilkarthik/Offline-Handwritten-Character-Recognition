@@ -1,0 +1,1210 @@
+---
+title: "Offline Handwritten Character Recognition - R Code"
+author: "Nikhil Karthik Pamidimukkala and Group"
+date: "April 28, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+
+```{r,warning=FALSE,message=FALSE}
+## Loading required packages
+
+library(gbm)
+library(glmnet)
+library(dplyr)
+library(e1071)
+library(caTools)
+library(MASS)
+library(class)
+library(caret)
+library(randomForest)
+library(data.table)
+library(data.table)
+library(caTools)
+library(tree)
+library(glmnet)
+library(pROC)
+library(ggplot2)
+library(factoextra)
+library(ggpubr)
+library(knitr)
+library(circlize)
+
+```
+
+# Code - Nikhil
+
+
+```{r}
+## Reading Labelled Data
+
+labelled <- read.csv("letters.labeled.csv",header = TRUE,row.names = NULL)
+
+## Reading Un Labelled Data
+unlabelled <-  read.csv("letters.unlabeled.csv",header = TRUE,row.names = NULL)
+
+## Removing Index column from labelled data
+labeled<- labelled[,c(-1)]
+
+## Removing Index column from unlabelled data
+unlab <- unlabelled[,-1]
+
+labeled %>% group_by(Letter) %>% tally() %>% ggplot(.,aes(Letter,n)) + geom_bar(stat = "identity",fill ="steelblue") + labs(y="Count", title = "Class Distribution of Characters in Labeled Data")
+
+
+```
+
+# Code - Nikhil
+
+```{r}
+
+## Visualizing the means of similar digits
+
+colors<-c('lightgrey','slateblue')
+cus_col<-colorRampPalette(colors=colors)
+par(mfrow=c(2,4),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+xx<-apply(labeled[labeled$Letter == "1" | labeled$Letter == "i",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="i and 1",col=cus_col(256), ylab="")
+
+
+xx<-apply(labeled[labeled$Letter == "o" | labeled$Letter == "0" | labeled$Letter =="d",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="0 and o and d",col=cus_col(256), ylab="")
+
+xx<-apply(labeled[labeled$Letter == "s" | labeled$Letter == "5",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="5 and s",col=cus_col(256), ylab="")
+
+
+xx<-apply(labeled[labeled$Letter == "2" | labeled$Letter == "z",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="2 and z",col=cus_col(256), ylab="")
+
+
+xx<-apply(labeled[labeled$Letter == "6" | labeled$Letter == "g",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="6 and g",col=cus_col(256), ylab="")
+
+xx<-apply(labeled[labeled$Letter == "u" | labeled$Letter == "v" | labeled$Letter == "4",-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="u and v and 4",col=cus_col(256), ylab="")
+
+xx<-apply(labeled[labeled$Letter == "k" | labeled$Letter == "r" ,-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="k and r",col=cus_col(256), ylab="")
+
+
+xx<-apply(labeled[labeled$Letter == "s" | labeled$Letter == "d" ,-1],2,mean)
+z<-array(xx,dim=c(56,56))
+z<-t(z[56:1,]) ##right side up
+image(1:56,1:56,z,main="m and h",col=cus_col(256), ylab="")
+
+
+
+
+
+```
+
+# Code - Nikhil
+
+```{r}
+
+## Function to split 56x56 image matrix into 49 equal 8x8 zones 
+
+matsplitt <- function(M, r = 7, c = 7) {
+  M <- matrix(unlist(M),nrow = 56,ncol = 56)
+  splitMatrix <- function(mat, nrow) {
+    split.data.frame(t(mat), ceiling(1:ncol(mat)/ncol(mat)*nrow))
+  }
+  sapply(splitMatrix(M, c), splitMatrix, r)
+}
+
+
+```
+
+# Code - Nikhil
+```{r}
+
+
+## Function to extract Features based on Diagnol Feature Extraction
+diagfeaturealgo <- function(data){
+s = apply(data,1,matsplitt)
+li = list()
+for(i in 1:nrow(data)){
+sub = s[[i]]
+zones = c(1:49)
+for(j in 1:length(sub)){
+  
+d = row(sub[[j]]) + col(sub[[j]])
+zones[j]=  round(mean(sapply(split(sub[[j]],d),sum)),2)
+}
+#matr = matrix(zones,ncol = 7,nrow = 7)
+#clsum = colSums(matr)
+#rwsum = rowSums(matr)
+li[[i]] = data.frame(t(zones))
+
+}
+undef = rbindlist(li)
+return(undef)
+
+}
+
+```
+
+
+# Code - Nikhil
+
+### Extracting diagonal based features from labeled and unlabeled data
+
+```{r}
+## Extracting Features from labelled data using Diagonal Based feature Extraction
+extractedfeatureslabelled <- diagfeaturealgo(labeled[,-1])
+
+
+## Adding the Letter labels to the features
+extractedfeatureslabelled$Letter <- labeled$Letter
+
+## Extracting Features from Unlabelled data using Diagonal Based Features Extraction
+extractedfeaturesunlabelled <- diagfeaturealgo(unlab)
+
+```
+
+# Code - Nikhil
+
+```{r}
+
+## Select few character for density plots
+selfe <- train[train$Letter %in% c('m','t','i'),]
+
+selfe<-droplevels(selfe)
+
+# Density plot of Diagonal Based Features
+
+dd <-  ggplot(selfe, aes(X40,fill=Letter)) + geom_density(alpha =0.8) + labs(title="Distribution of DBF - X40")
+
+aa<- ggplot(selfe, aes(X29,fill=Letter)) + geom_density(alpha =0.8) + labs(title="Distribution of DBF - X29")
+
+bb<- ggplot(selfe, aes(X12,fill=Letter)) + geom_density(alpha =0.8) + labs(title="Distribution of DBF - X12")
+
+
+cc <- ggplot(selfe, aes(X20,fill=Letter)) + geom_density(alpha =0.8) + labs(title="Distribution of DBF - X20")
+
+
+ggarrange(bb,cc,aa,dd,common.legend = T)
+
+## Covariance ellipses
+
+heplots::covEllipses(selfe[,c(25,26)], 
+                    selfe$Letter, 
+                     fill = TRUE, 
+                     pooled = FALSE,
+                  fill.alpha = 0.05)
+
+
+
+
+```
+
+# Code - Nikhil
+
+### Hierarchial Clustering on diagonal features
+
+```{r}
+kmn <- data.frame()
+
+# Averaging the Diagonal based features for each label which gives one row for each label
+for(i in unique(extractedfeatureslabelled$Letter)){
+x <- as.data.frame(t(apply(extractedfeatureslabelled[extractedfeatureslabelled$Letter == i,-50],2,mean)))
+row.names(x) <- i
+kmn <- rbind(kmn,x)
+}
+set.seed(602)
+
+# Hierarchial clustering 
+
+distance <- dist(kmn)
+letters_hclust <- hclust(distance,method ="complete")
+## The clustering similar labels
+plot(letters_hclust, xlab="")
+
+
+
+
+
+
+
+
+```
+
+
+
+### Training and validation split
+
+
+# Code - Nikhil
+
+```{r}
+## Splitting extracted features labelled data into training and test sets
+set.seed(602)
+indx <- createDataPartition(extractedfeatureslabelled$Letter, p = 0.6, list=FALSE)
+train <- extractedfeatureslabelled[indx,]
+test <- extractedfeatureslabelled[-indx,]
+
+```
+
+# Code - Nikhil
+
+```{r}
+## Splitting labeled data into training and test sets for pca
+
+set.seed(602)
+indxx <- createDataPartition(labeled$Letter, p = 0.6, list=FALSE)
+trainfull <- labeled[indxx,]
+testfull <-  labeled[-indxx,]
+
+```
+
+# Code - Nikhil
+
+### PCA Features
+```{r}
+
+# performing pca on train data
+pcamodtr<- prcomp(trainfull[,-1])
+
+# selecting the first 39 principal components
+trainpca <- as.data.frame(pcamodtr$x[,1:39])
+
+# converting test data into principal components
+testpca <- as.matrix(testfull[,-1])%*% as.matrix(pcamodtr$rotation[,1:39])
+testpca<- as.data.frame(testpca)
+
+
+#c(24,39,64,107,214)
+Pvar <- pcamodtr$sdev^2/sum(pcamodtr$sdev^2)
+cumsum(Pvar/sum(Pvar))[24] # 50%  variablility explained 
+cumsum(Pvar/sum(Pvar))[39] # 60%  variablility explained 
+cumsum(Pvar/sum(Pvar))[64] # 70%  variablility explained 
+cumsum(Pvar/sum(Pvar))[107] # 80%  variablility explained 
+cumsum(Pvar/sum(Pvar))[214] # 90%  variablility explained 
+
+trainpca$Letter <- trainfull$Letter
+testpca$Letter <- testfull$Letter
+
+
+
+
+```
+
+# Code - Nikhil
+
+
+### Proportion of Variance explained by principal components
+
+
+```{r}
+#pcamod<- prcomp(labeled[,-1])
+pcadata <- as.data.frame(pcamod$x)
+pcadatatr <- as.data.frame(pcamodtr$x)
+pcadatatr$Letter <- trainfull$Letter
+pcadata$Letter <- labeled$Letter
+
+
+
+trpca <- as.data.frame(pcamod$x[,1:42])
+tspca <- as.matrix(unlab)%*% as.matrix(pcamodtr$rotation[,1:42])
+
+ggplot(data=pcadatatr,aes(x = PC1,y = PC2, color = Letter ))  + geom_text(aes(label =Letter))+labs(title = "PCA")+ guides(color = F)
+
+
+pca_var <- pcamodtr$sdev^2
+pve <-100* pca_var/ sum(pca_var)
+a1<- ggplot(data = c(),aes(1:613,pve)) + geom_line() + geom_point() +theme(plot.title = element_text(hjust =0.5))+ scale_x_continuous(breaks = seq(1,1000,50)) +labs(x="Principal Component",y = "Proportion of
+Variance Explained ", title ="Proportion of
+Variance Explained ") 
+
+## Visualizing the data, shows non-linearly seperable data, therefore non-linear classifier models such as svm, random forests should be used
+
+a2<- ggplot(data = c(),aes(1:613,cumsum(pve))) + geom_line() + geom_point()+ scale_x_continuous(breaks = seq(1,1000,50)) + theme(plot.title = element_text(hjust =0.5)) + labs(x="Principal Component",y = "Cumulative Proportion of
+Variance Explained ", title ="Cumulative Proportion of
+Variance Explained") 
+
+
+ggarrange(a1,a2)
+
+```
+
+# Code - Nikhil
+
+### Selecting Number of PCA components using Cross-validation
+
+```{r}
+
+Pvar <- pcamod$sdev^2/sum(pcamod$sdev^2)
+cumsum(Pvar/sum(Pvar))[26] # 50%  variablility explained 
+cumsum(Pvar/sum(Pvar))[42] # 60%  variablility explained 
+cumsum(Pvar/sum(Pvar))[69] # 70%  variablility explained 
+cumsum(Pvar/sum(Pvar))[124] # 80%  variablility explained 
+cumsum(Pvar/sum(Pvar))[271] # 90%  variablility explained 
+
+
+
+
+acclda <- c()
+accsvm <- c()
+accrf <- c()
+accknn <- c()
+set.seed(602)
+train_ctrl <- trainControl(method="cv", number=10)
+j <-0
+#c(24,39,64,107,214)
+for(i in c(24,39,64,107,214)){
+j <- j +1
+pcadat <- as.data.frame(pcamodtr$x[,1:i])
+pcadat$Letter <- trainfull$Letter
+svmcv <- train(Letter~., data = pcadat,trControl = train_ctrl,method = "svmRadial",tuneGrid = expand.grid(C= 4,sigma = 0.01))
+accsvm[j] <- svmcv$results$Accuracy 
+
+rfcv <- train(Letter~., data = pcadat,trControl = train_ctrl,method = "rf",tuneGrid = expand.grid(mtry= 19))
+accrf[j] <- rfcv$results$Accuracy
+
+ldacv<-train(Letter~., data = pcadat,trControl = train_ctrl,method = "lda" )
+acclda[j]<- ldacv$results$Accuracy
+
+knncv <- train(Letter~., data = pcadat,trControl = train_ctrl,method = "knn",tuneGrid =expand.grid(k=5))
+accknn[j] <- knncv$results$Accuracy
+}
+
+
+
+
+
+a <- ggplot(data =c(),aes(x = 1:5,y = acclda)) + geom_line() + geom_point() +  scale_x_discrete(name = "Percentage Variability",limits =c("50-Var","60-Var","70-Var","80-Var","90-Var")) + labs(y = "10-Fold CV Accuracy",title = "LDA") 
+
+b <- ggplot(data =c(),aes(x = 1:5,y = accsvm)) + geom_line() + geom_point() +  scale_x_discrete(name = "Percentage Variability",limits =c("50-Var","60-Var","70-Var","80-Var","90-Var")) + labs(y = "10-Fold CV Accuracy",title = "SVM") 
+
+c <- ggplot(data =c(),aes(x = 1:5,y = accrf)) + geom_line() + geom_point() +  scale_x_discrete(name = "Percentage Variability",limits =c("50-Var","60-Var","70-Var","80-Var","90-Var")) + labs(y = "10-Fold CV Accuracy",title = "Random Forest") 
+
+d <- ggplot(data =c(),aes(x = 1:5,y = accrf)) + geom_line() + geom_point() +  scale_x_discrete(name = "Percentage Variability",limits =c("50-Var","60-Var","70-Var","80-Var","90-Var")) + labs(y = "10-Fold CV Accuracy",title = "KNN") 
+
+ggarrange(a,b,c,d)
+
+
+
+```
+
+
+
+### Visualizing selected Number of PCA Components
+
+```{r}
+
+labeled<- data.table(labeled)
+n_dim <- 49  ##60 % PVE
+
+projected=scale(labeled[,(2:ncol(labeled)),with = F], pcamod$center, pcamod$scale) %*% pcamod$rotation
+coord_x=data.table(labeled$Letter,projected[,1:n_dim]%*%t(pcamod$rotation)[1:n_dim,])
+par(mfrow=c(6,6),mar=c(0.1,0.1,0.1,0.1))
+##Plotting 36 observations
+for (i in 1:36)
+{
+ mat=matrix(as.numeric(coord_x[i,2:ncol(labeled)]),nrow = 56,ncol=56,byrow = F)
+mat=mat[nrow(mat):1,]
+image(t(mat),useRaster=T,axes =F, col=cus_col(255))
+}
+
+
+n_dim <- 24 ## 50 % CPVE
+
+projected=scale(labeled[,(2:ncol(labeled)),with = F], pcamod$center, pcamod$scale) %*% pcamod$rotation
+coord_x=data.table(labeled$Letter,projected[,1:n_dim]%*%t(pcamod$rotation)[1:n_dim,])
+par(mfrow=c(6,6),mar=c(0.1,0.1,0.1,0.1))
+##Plotting 36 observations
+for (i in 1:36)
+{
+ mat=matrix(as.numeric(coord_x[i,2:ncol(labeled)]),nrow = 56,ncol=56,byrow = F)
+mat=mat[nrow(mat):1,]
+image(t(mat),useRaster=T,axes =F, col=cus_col(255))
+}
+
+
+```
+
+
+
+
+
+# Code - Nikhil
+
+
+
+### SVM with Diagonal Based features
+
+
+```{r}
+
+
+
+set.seed(602)
+
+# cross validation to tune parameters
+svmrad <- train(Letter~., data = train,trControl = train_ctrl,method = "svmRadial",tuneLength = 10)
+svmpoly <- train(Letter~., data = train,trControl = train_ctrl,method = "svmPoly",tuneLength = 10)
+svmlin <- train(Letter~., data = train,trControl = train_ctrl,method = "svmLinear",tuneGrid = expand.grid(C=c(0.01,0.1,1,2,5,8,10)))
+
+
+## Training and Test Error Rate SVM Radial
+svmrd <- svm(Letter~., data =train,kernel="radial",cost = 4, gamma =0.01 )
+svmradpredtr <- predict(svmrd,newdata =train)
+svmraderrtr <- mean(svmradpredtr != train$Letter)
+names(svmraderrtr) <- "Training Error Rate SVM Radial"
+svmraderrtr*100
+
+svmradpredts <- predict(svmrd,newdata =test)
+svmraderrts <- mean(svmradpredts != test$Letter)
+names(svmraderrts) <- "Test Error Rate SVM Radial"
+svmraderrts*100
+
+## Training and Test Error Rate SVM Polynomial
+
+svmply <- svm(Letter~., data=train, kernel = "polynomial",degree= 3,cost=12)
+svmpolypredtr <- predict(svmply,newdata =train)
+svmpolyerrtr <- mean(svmpolypredtr != train$Letter)
+names(svmpolyerrtr) <- "Training Error Rate SVM Polynomial"
+svmpolyerrtr*100
+
+svmpolypredts <- predict(svmply,newdata =test)
+svmpolyerrts <- mean(svmpolypredts != test$Letter)
+names(svmpolyerrts) <- "Test Error Rate SVM Polynomial"
+svmpolyerrts*100
+
+## Training and Test Error Rate SVM Polynomial
+
+
+svmln <- svm(Letter~., data=train, kernel ="linear",cost=0.3)
+svmlinpredtr <- predict(svmln,newdata =train)
+svmlinerrtr <- mean(svmlinpredtr != train$Letter)
+names(svmlinerrtr) <- "Training Error Rate SVC"
+svmlinerrtr*100
+
+svmlinpredts <- predict(svmln,newdata =test)
+svmlinerrts <- mean(svmlinpredts != test$Letter)
+names(svmlinerrts) <- "Test Error Rate SVC"
+svmlinerrts*100
+
+# svm rad train -  3.43, test = 27.39, c =4, g = 0.01
+# svm poly train = 1.47 , test = 32.56 , c = 12, d =3
+# svm lin train - 1.46, test = 31.78, c = 0.3
+
+
+
+
+
+```
+
+```{r}
+##  function for chord plot
+
+mostmiss <- function(y,x,m){
+
+acvspr <- data.frame(Actual=x,Predicted = y)
+acvspr$Outcome <- ifelse(y == x,"C","W")
+wrngs<- acvspr %>%  filter(Outcome == "W") %>% dplyr::select(Actual,Predicted)
+clsw<- classwise(y,x,m)
+top15<- clsw %>% arrange(desc(Acc)) %>% dplyr::select(Letter) %>% slice(.,1:10)
+top15g <- clsw %>% arrange(desc(Acc)) %>% dplyr::select(Letter) %>% slice(.,16:30)
+crd<- wrngs[wrngs$Actual %in% top15$Letter,] %>% group_by(Actual,Predicted) %>%   summarise (n = n()) %>% mutate(perc = n/sum(n) *100) %>% arrange(Actual,desc(perc)) %>% dplyr::select(Actual,Predicted,perc)
+
+crd1 <- wrngs[wrngs$Actual %in% top15g$Letter,] %>% group_by(Actual,Predicted) %>%   summarise (n = n()) %>% mutate(perc = n/sum(n) *100) %>% arrange(Actual,desc(perc)) %>% dplyr::select(Actual,Predicted,perc)
+
+d<- by(crd, crd["Actual"], head, n=1)
+crdpltdat <- Reduce(rbind,d) %>% arrange(Actual)
+crdpltdat$Predicted <- c(paste(crdpltdat$Predicted,"/",round(crdpltdat$perc)))
+chordDiagramFromDataFrame(crdpltdat, directional = 1, direction.type = c("arrows"),col=c("#ffffff"),link.arr.col =rainbow(15),link.arr.lwd = 4,annotationTrack = c("name","grid"))
+title(paste0("Top 10 Misclassified Lables - ", m), cex = 0.8)
+
+
+}
+
+# function to get classwise error rates
+classwise <- function(pred, actu,Model){
+classacc <- data.frame(tapply(pred != actu, actu,mean))
+colnames(classacc) <- "Acc"
+classacc$Letter <- row.names(classacc)
+errrate <- classacc %>% arrange(Acc)
+errrate$Model <- Model
+#return(plt)
+return(errrate)
+  
+}
+
+
+
+# function to get classwise errors barplot
+
+classwisebarplot <- function(pred, actu){
+classacc <- data.frame(tapply(pred != actu, actu,mean))
+colnames(classacc) <- "Acc"
+classacc$Lettr <- row.names(classacc)
+classacc <- classacc %>% arrange(Lettr)
+mtc <- data.frame(pred,ifelse(pred == actu,1,0))
+colnames(mtc)<- c("Letter","mtch")
+newcl <- newcl <- mtc %>% filter(mtch == 1)%>% group_by(Letter) %>% tally() %>% arrange(Letter)
+actclasslen <- as.data.frame(xtabs(~actu))
+actclasslen<- actclasslen %>% arrange(actu)
+colnames(actclasslen) <- c("Letter","n")
+#newdt<- full_join(newcl,actclasslen,by = "Letter") 
+#newdt$n.x[is.na(newdt$n.x)] <- 0
+#newdt$Letter <- as.character(newdt$Letter)
+#newdt <- newdt %>% arrange(Letter)
+#classacc <- cbind(classacc,newdt)
+plt <-ggplot(data =classacc,aes(reorder(Lettr,-Acc),Acc)) + geom_bar(stat="identity",fill = "steelblue") + labs(x ="Letter",y ="Error rate",title = "Class Wise Error Rate") 
+return(plt)
+
+}
+
+
+```
+
+
+### SVM with PCA Features
+
+
+
+```{r}
+set.seed(602)
+# # cross validation to tune parameters
+svmrad1 <- train(Letter~., data = trainpca,trControl = train_ctrl,method = "svmRadial",tuneLength = 10)
+svmpoly1 <- train(Letter~., data = trainpca,trControl = train_ctrl,method = "svmPoly",tuneLength = 10)
+svmlin1 <- train(Letter~., data = trainpca,trControl = train_ctrl,method = "svmLinear",tuneGrid = expand.grid(C=c(0.01,0.1,1,2,5,8,10)))
+
+## Training and Test Error Rate SVM Radial
+svmrad1 <- svm(Letter~., data = trainpca,cost = 1,gamma = 0.02)
+svmradpredtr1 <- predict(svmrad1,newdata =trainpca)
+svmraderrtr1 <- mean(svmradpredtr1 != trainpca$Letter)
+names(svmraderrtr1) <- "Training Error Rate SVM Radial - PCA"
+svmraderrtr1*100
+
+svmradpredts1 <- predict(svmrad1,newdata =testpca)
+svmraderrts1 <- mean(svmradpredts1 != testpca$Letter)
+names(svmraderrts1) <- "Test Error Rate SVM Radial - PCA"
+svmraderrts1*100
+
+## Training and Test Error Rate SVM Polynomial
+svmpoly1 <- svm(Letter~., data= trainpca,d=3,cost=5,kernel="polynomial")
+svmpolypredtr1 <- predict(svmpoly1,newdata =trainpca)
+svmpolyerrtr1 <- mean(svmpolypredtr1 != trainpca$Letter)
+names(svmpolyerrtr1) <- "Training Error Rate SVM Polynomial - PCA"
+svmpolyerrtr1*100
+
+svmpolypredts1 <- predict(svmpoly1,newdata =testpca)
+svmpolyerrts1 <- mean(svmpolypredts1 != testpca$Letter)
+names(svmpolyerrts1) <- "Test Error Rate SVM Polynomial - PCA"
+svmpolyerrts1*100
+
+## Training and Test Error Rate SVM Polynomial
+svmlin1<- svm(Letter~.,data=trainpca,cost=1)
+svmlinpredtr1 <- predict(svmlin1,newdata =trainpca)
+svmlinerrtr1 <- mean(svmlinpredtr1 != trainpca$Letter)
+names(svmlinerrtr1) <- "Training Error Rate SVC - PCA"
+svmlinerrtr1*100
+
+svmlinpredts1 <- predict(svmlin1,newdata =testpca)
+svmlinerrts1 <- mean(svmlinpredts1 != testpca$Letter)
+names(svmlinerrts1) <- "Test Error Rate SVC - PCA"
+svmlinerrts1*100
+
+
+#svm radial - train 14.84, test 38.50 c = 1, g = 0.02
+#svm poly - train 4.4, test = 50.9, c =5, d =3
+#svm lin - train 12.23 , test = 39.27 , c =1
+
+```
+
+
+
+
+### Random Forest with Digonal Based Features
+
+
+```{r}
+set.seed(602)
+# cross validation to tune parameters
+rfmod <- train(Letter~., data = train, method = "rf",trControl = train_ctrl,tuneLength =10)
+
+
+rfmd <- randomForest(Letter~.,data=train, mtry =7,ntrees=500)
+rfpredtr <- predict(rfmd,newdata = train, type ="class")
+rfpredts <- predict(rfmd, newdata =  test, type ="class")
+rferrtr <- mean(rfpredtr != train$Letter)
+rferrts <- mean(rfpredts != test$Letter)
+names(rferrtr) <- "Training Error Rate : Random Forest"
+names(rferrts) <- "Test Error Rate: Random Forest"
+rferrtr*100
+rferrts*100
+
+
+```
+
+
+### Random Forest with PCA features
+
+```{r}
+set.seed(602)
+# cross validation to tune parameters
+rfmod1 <- train(Letter~., data = trainpca, trControl = train_ctrl,method = "rf",tuneLength =10,importance =TRUE)
+
+
+rfmod1<- randomForest(Letter~.,data=trainpca, mtry =2,ntrees=500)
+rfpredtr1 <- predict(rfmod1,newdata = trainpca, type ="class")
+rfpredts1 <- predict(rfmod1, newdata =  testpca, type ="class")
+rferrtr1 <- mean(rfpredtr1 != trainpca$Letter)*100
+rferrts1 <- mean(rfpredts1 != testpca$Letter)*100
+names(rferrtr1) <- "Training Error Rate : Random Forest - PCA"
+names(rferrts1) <- "Test Error Rate: Random Forest - PCA"
+rferrtr1
+rferrts1
+
+
+
+```
+
+
+
+
+### LDA with Diagonal Based Features
+
+
+```{r}
+
+set.seed(602)
+
+ldamod <- lda(Letter~.,data=train)
+ldapredts<- predict(ldamod,newdata = test)$class
+ldapredtr <- predict(ldamod,newdata = train)$class
+ldaerrtr <- mean(ldapredtr != train$Letter)
+names(ldaerrtr) <- "Training Error Rate : LDA"
+ldaerrtr*100
+ldaerrts<- mean(ldapredts != test$Letter)
+names(ldaerrts) <- "Test Error Rate : LDA"
+ldaerrts*100
+
+classwisebarplot(ldapredts,test$Letter)
+```
+
+
+### LDA with PCA Features
+
+```{r}
+
+set.seed(602)
+ldamod1 <- lda(Letter~., data = trainpca)
+ldapredts1<- predict(ldamod1,newdata = testpca)$class
+ldapredtr1 <- predict(ldamod1,newdata = trainpca)$class
+ldaerrtr1 <- mean(ldapredtr1 != trainpca$Letter)
+names(ldaerrtr1) <- "Training Error Rate : LDA - PCA"
+ldaerrtr1*100
+ldaerrts1<- mean(ldapredts1 != testpca$Letter)
+names(ldaerrts1) <- "Test Error Rate : LDA - PCA "
+ldaerrts1*100
+
+classwisebarplot(ldapredts1,testpca$Letter)
+
+```
+
+
+
+### KNN with Diagonal Based Features
+
+```{r}
+set.seed(602)
+
+# k =3 obtained after cross-validation
+
+knnmod <- train(Letter ~ ., data = train, method = "knn", trControl = train_ctrl, tuneGrid=expand.grid(k=3))
+
+knnpred <- predict(knnmod,newdata = test)
+knnerr <- mean(knnpred != test$Letter)
+knnpredtr <- predict(knnmod,newdata = train)
+knnerrtr <- mean(knnpredtr != train$Letter)
+names(knnerrtr) <- "Train Error Rate - KNN k =3"
+names(knnerr) <- "Test Error Rate - KNN k = 3"
+knnerr*100
+knnerrtr*100
+knnmod
+
+classwisebarplot(knnpred,test$Letter)
+
+```
+
+
+
+
+### KNN with PCA Features
+
+
+```{r}
+
+set.seed(602)
+
+knnpca <- train(Letter ~ ., data = trainpca, method = "knn", trControl = train_ctrl, tuneGrid=expand.grid(k=5))
+
+knnpred1 <- predict(knnpca,newdata = testpca)
+knnerr1 <-mean(knnpred1 != testpca$Letter)
+knnpredtr1 <- predict(knnpca,newdata = trainpca)
+knnerrtr1 <- mean(knnpredtr1 != trainpca$Letter)
+names(knnerr1) <- "Test Error Rate - KNN k = 5 - PCA"
+names(knnerrtr1) <- "Train Error Rate - KNN k = 5 -PCA"
+knnerr1*100
+knnerrtr1*100
+
+classwisebarplot(knnpred1,testpca$Letter)
+```
+
+# classwise error rates for all models
+
+```{r}
+
+
+
+
+kn <- classwise(knnpred,test$Letter,"KNN")
+sv <- classwise(svmradpredts,test$Letter,"SVM")
+rf <- classwise(rfpredts,test$Letter,"RF")
+ld <- classwise(ldapredts,test$Letter,"LDA")
+full<- rbind(kn,sv,rf,l)
+
+
+
+a <- ggplot(data = full,aes(Letter,Acc))+ geom_line(size=1.2,aes(group= Model,color=Model)) + labs(y="Error Rate",title = "Classwise Error Rate - DBF")
+
+
+kn1 <- classwise(knnpred1,testpca$Letter,"KNN")
+sv1 <- classwise(svmradpredts1,testpca$Letter,"SVM")
+rf1 <- classwise(rfpredts1,testpca$Letter,"RF")
+ld1 <- classwise(ldapredts1,testpca$Letter,"LDA")
+full1<- rbind(kn,sv,rf,ld1)
+
+
+
+b <- ggplot(data = full1,aes(Letter,Acc))+ geom_line(size=1.2,aes(group= Model,color=Model)) + labs(y="Error Rate",title = "Classwise Error Rate - PCA Features")
+
+
+ggarrange(a,b,common.legend = T)
+
+
+```
+
+# Code - Nikhil
+
+### Choosing one model with Diagonal Based Features
+
+
+
+```{r}
+
+### SVM with Radial basis kernel is the best model which gives least error rate 
+
+set.seed(602)
+
+svmdpreds <- predict(svmrd,newdata = extractedfeaturesunlabelled)
+
+
+```
+
+## Mechanism to label unlabeled data
+
+
+```{r}
+
+
+
+## Use the the best svm model to predict labels for unlabeled data, if the prediction matches printed
+## image then click '.' which saves the label value in values vector, if prediction is wrong directly enter the label
+
+readinteger <- function()
+{ 
+  n <- readline(prompt="If yes press 'y', otherwise enter character : ")
+  return(n)
+}
+
+
+vals<-c()
+
+
+
+for(i in 1:10000){
+z <- array(as.matrix(unlab[i,]), dim=c(56,56))
+# Plot that matrix
+
+par(mfrow=c(1,2),pty='s',mar=c(1,1,1,1),xaxt='n',yaxt='n')
+
+z <- t(z[56:1,]) ##right side up
+
+image(1:56,1:56,z,main = paste0("Predicted = ",svmdpreds[i]), cex.main = 0.8)
+
+{
+mtch = readinteger()
+}
+if(mtch == "."){
+  
+vals[k] <- as.character(svmdpreds[i])
+next
+
+} 
+else if(mtch != "."){
+
+vals[k]<- mtch
+
+}
+
+}  
+
+```
+
+
+
+
+```{r}
+
+# combining labeled and unlabeled data
+extrcunlab <- extractedfeaturesunlabelled
+extrcunlab$Letter <-  vals
+
+
+modeldata <- rbind(extractedfeatureslabelled,extrcunlab)
+
+```
+
+
+## 5- fold cross validation function
+
+```{r}
+CVmod <- function(Data,mod){
+  
+nmm1 = Data[sample(nrow(Data)),]
+
+#Create 5 similar size folds
+
+folds = cut(seq(1,nrow(nmm1)),breaks=5,labels=FALSE)
+merr = c()
+
+# 10 fold cross validation
+for(i in 1:5){
+    #Select your data by fold using the which() function 
+    indexes = which(folds==i)
+    #assign one fold to test
+    testt = nmm1[indexes, ]
+    #assign all other (5) folds to train
+    trainn = nmm1[-indexes, ]
+    #fitting the model on train data
+    #predicting on test data
+    
+    if(mod == 1){
+    model1 = randomForest(Letter~., data = trainn,mtry=7)
+    pred = predict(model1,newdata = testt,type= "class")    
+    merr[i] = mean(pred != testt$Letter)
+      
+    }
+    
+    if(mod == 2){
+    model1 = svm(Letter~.,data = trainn,kernel = "radial",cost = 4, gamma = 0.02)
+    pred = predict(model1,newdata = testt)    
+    merr[i] = mean(pred != testt$Letter)
+    }
+   #svmod1 <- svm(Letter~.,kernel = "radial",cost = 2.5,gamma=0.01,data = train)
+    if(mod == 3){
+       model1=svm(Letter~., data= trainn,kernel ="polynomial",cost=8,degree = 3)
+       pred = predict(model1,newdata = testt)    
+       merr[i] = mean(pred != testt$Letter)
+    }
+    
+    if(mod == 4){
+      
+    model1 =  lda(Letter~.,data = trainn)
+    pred= predict(model1, newdata = testt)$class
+    merr[i] = mean(pred != testt$Letter)
+      
+    }
+    
+    
+    if(mod == 5){
+      
+      trpred =  as.matrix(trainn[,1:49])
+      trresp = as.matrix(trainn[,50])
+      tspred = as.matrix(testt[,1:49])
+      tsresp = as.matrix(testt[,50])
+      pred   = knn(trpred,tspred,trresp, k = 5)
+      merr[i]<- mean(pred != testt$Letter)
+      
+    }
+    
+    
+     if(mod == 6){
+       model1=svm(Letter~., data= trainn,kernel ="linear",cost=0.1)
+       pred = predict(model1,newdata = testt)    
+       merr[i] = mean(pred != testt$Letter)
+    }
+    
+    
+}
+## mean of all errors 
+err = round(mean(merr),4)
+return(err)
+
+
+}
+CVmod(trainmod,1)
+set.seed(602)
+CVmod(trainmod,2)
+CVmod(trainmod,3)
+CVmod(trainmod,4)
+CVmod(trainmod,5)
+CVmod(trainmod,6)
+#0.1471 rf
+#0.1126 svm rad
+#0.1375 svm poly
+#0.2503  lda
+# 0.1702 knn
+#15.38 svm lin
+```
+
+
+```{r}
+## Splitting the modeldata into 90% training and 10 % test sets
+set.seed(602)
+indx <- createDataPartition(modeldata$Letter, p = 0.9, list=FALSE)
+trainmod <- modeldata[indx,]
+testmod <-  modeldata[-indx,]
+
+
+f1 <- trainmod %>% group_by(Letter) %>% tally() %>% ggplot(.,aes(x= Letter,y = n)) + geom_bar(stat = "identity",fill="steelblue") + theme_grey() + labs(y ="Count",title="Frequency of Characters - Training Set")
+
+
+f2 <- testmod %>% group_by(Letter) %>% tally() %>% ggplot(.,aes(x= Letter,y = n)) + geom_bar(stat = "identity",fill="steelblue")+theme_grey() + labs(y ="Count",title="Frequency of Characters - Test Set")
+
+modeldata %>% group_by(Letter) %>% tally() %>% ggplot(.,aes(x= Letter,y = n)) + geom_bar(stat = "identity",fill="steelblue") + theme_grey() + labs(y ="Count",title="Class Distribution of Characters ")
+
+
+ggarrange(f1,f2)
+
+```
+
+
+# Code - Nikhil
+
+
+## SVM Radial
+
+```{r}
+
+set.seed(602)
+##getting the optimal parameters for svm radial using cv
+#svmradfin <-  train(Letter~., data = trainmod,trControl = train_ctrl,method = "svmRadial",tuneLength = 10)
+## Fitting the best model using svm function
+
+svmradfin <- svm(Letter~., data = trainmod, kernel ="radial",cost = 4,gamma = 0.02)
+
+svmradfinpredts  <- predict(svmradfin,newdata = testmod)
+svmradfinpredtr <- predict(svmradfin,newdata = trainmod)
+svmradfinerrts <- mean(svmradfinpredts != testmod$Letter)
+
+svmradfinerrtr <- mean(svmradfinpredtr != trainmod$Letter)
+names(svmradfinerrtr) <- "Train Error - SVM"
+names(svmradfinerrts) <- "Test Error - SVM"
+svmradfinerrtr * 100
+svmradfinerrts * 100
+
+
+
+s1 <-classwisebarplot(svmradfinpredts,testmod$Letter)
+s2 <- classwisebarplot(svmplyfinpredts,testmod$Letter)
+s3 <- classwisebarplot(svmlinfinpredts,testmod$Letter)
+ggarrange(s1,s2,s3)
+
+
+```
+
+
+## SVM Polynomial
+
+```{r}
+set.seed(602)
+##getting the optimal parameters for svm polynomial using cv
+#svmradfin <-  train(Letter~., data = trainmod,trControl = train_ctrl,method = "svmRadial",tuneLength = 10)
+## Fitting the best model using svm function
+
+svmplyfin <- svm(Letter~., data = trainmod, kernel ="polynomial",cost = 8,degree=3 )
+
+svmplyfinpredts  <- predict(svmplyfin,newdata = testmod)
+svmplyfinpredtr <- predict(svmplyfin,newdata = trainmod)
+svmplyfinerrts <- mean(svmplyfinpredts != testmod$Letter)
+
+svmplyfinerrtr <- mean(svmplyfinpredtr != trainmod$Letter)
+names(svmplyfinerrtr) <- "Train Error - SVM"
+names(svmplyfinerrts) <- "Test Error - SVM"
+svmplyfinerrtr * 100
+svmplyfinerrts * 100
+## high error rates numerics
+classwisebarplot(svmplyfinpredts,testmod$Letter)
+#Number of support vectors is 
+
+```
+
+# SVM Linear
+
+```{r}
+set.seed(602)
+##getting the optimal parameters for svm linear using cv
+#svmlinfin <-  train(Letter~., data = trainmod,trControl = train_ctrl,method = "svmLinear",tuneGrid = #expand.grid(C=c(0.01,0.1,1,2,5,8,10)))
+## Fitting the best model using svm function
+
+svmlinfin <- svm(Letter~., data = trainmod, kernel ="linear",cost = 0.1)
+
+svmlinfinpredts  <- predict(svmlinfin,newdata = testmod)
+svmlinfinpredtr <- predict(svmlinfin,newdata = trainmod)
+svmlinfinerrts <- mean(svmlinfinpredts != testmod$Letter)
+
+svmlinfinerrtr <- mean(svmlinfinpredtr != trainmod$Letter)
+names(svmlinfinerrtr) <- "Train Error - SVM"
+names(svmlinfinerrts) <- "Test Error - SVM"
+svmlinfinerrtr * 100
+svmlinfinerrts * 100
+
+classwisebarplot(svmplyfinpredts,testmod$Letter)
+
+
+```
+
+
+
+## LDA
+
+```{r}
+set.seed(602)
+
+ldafin <- lda(Letter~.,data = trainmod)
+ldafinpredts  <- predict(ldafin,newdata = testmod)$class
+ldafinpredtr <- predict(ldafin,newdata = trainmod)$class
+ldafinerrts <- mean(ldafinpredts != testmod$Letter)
+
+ldafinerrtr <- mean(ldafinpredtr != trainmod$Letter)
+names(ldafinerrtr) <- "Train Error - LDA"
+names(ldafinerrts) <- "Test Error - LDA"
+ldafinerrtr
+ldafinerrts 
+classwisebarplot(ldafinpredts,testmod$Letter)
+```
+
+
+## KNN
+
+```{r}
+
+set.seed(602)
+# cross-validation to select optimal k
+knnfin <-  train(Letter~., data = trainmod,trControl = train_ctrl,method = "knn",tuneLength = 10)
+
+knnfinpredts  <- predict(knnfin,newdata = testmod)
+knnfinpredtr <- predict(knnfin,newdata = trainmod)
+knnfinerrts <- mean(knnfinpredts != testmod$Letter)
+
+knnfinerrtr <- mean(knnfinpredtr != trainmod$Letter)
+names(knnfinerrtr) <- "Train Error - KNN"
+names(knnfinerrts) <- "Test Error - KNN"
+knnfinerrtr * 100
+knnfinerrts * 100
+
+classwisebarplot(knnfinpredts,testmod$Letter)
+
+```
+
+## RF
+
+```{r}
+options(scipen = 999)
+set.seed(602)
+# getting optimal parameters using cross-validation
+#rffin <-  train(Letter~., data = trainmod,trControl = train_ctrl,method = "rf",tuneLength = 10)
+
+rffin <- randomForest(Letter~.,data = trainmod,mtry=7,ntrees=500)
+rffinpredts  <- predict(rffin,newdata = testmod)
+rffinpredtr <- predict(rffin,newdata = trainmod)
+rffinerrts <- round(mean(rffinpredts != testmod$Letter),4)
+
+rffinerrtr <- mean(rffinpredtr != trainmod$Letter)
+names(rffinerrtr) <- "Train Error - RF"
+names(rffinerrts) <- "Test Error - RF"
+rffinerrtr * 100
+rffinerrts * 100
+
+classwisebarplot(rffinpredts,testmod$Letter)
+
+
+
+```
+
+
+```{r}
+
+## function to get classwise error rates
+
+
+
+
+
+
+kn <- classwise(knnfinpredts,testmod$Letter,"KNN")
+sv <- classwise(svmradfinpredts,testmod$Letter,"SVM- R")
+svp <- classwise(svmplyfinpredts,testmod$Letter,"SVM - P")
+svl <- classwise(svmlinfinpredts,testmod$Letter,"SVM - L")
+rf <- classwise(rffinpredts,testmod$Letter,"RF")
+lda <- classwise(ldafinpredts,testmod$Letter,"LDA")
+
+full<- rbind(kn,sv,rf,lda)
+
+ggplot(data = full,aes(Letter,Acc))+ geom_line(size=1.2,aes(group= Model,color=Model)) + labs(y="Error Rate",title = "Classwise Error Rate")
+                                                                                              
+                                                                                                                                                  
+                                                                                                
+```
+
+
+
+
+
+### Final Model
+
+```{r}
+
+## Final Model to predict the data given in exam is SVM with Radial Kernel. The following can be used when the 30000 data is given.
+
+# read in the 30000 data given 
+
+examdata<- read.csv("Name of the exam file")
+
+# extract diagonal features from the data
+tstdata<- diagfeaturealgo(examdata)
+
+# make predictions using the model
+finalpred <- predict(svmradfin,newdata = tstdata)
+
+
+
+```
+
+
+
